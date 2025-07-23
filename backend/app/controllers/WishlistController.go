@@ -1,19 +1,22 @@
 package controllers
 
 import (
-	"context"
-	"log"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mingfulsnack/app/config"
-	"github.com/mingfulsnack/app/models"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type WishlistController struct{}
+
+// AddToWishlistRequest struct for adding products to wishlist
+type AddToWishlistRequest struct {
+	ProductID string `json:"product_id" binding:"required"`
+}
+
+// RemoveFromWishlistRequest struct for removing products from wishlist
+type RemoveFromWishlistRequest struct {
+	ProductID string `json:"product_id" binding:"required"`
+}
 
 // GetWishlist lấy wishlist của user
 func (wc *WishlistController) GetWishlist(c *gin.Context) {
@@ -27,53 +30,49 @@ func (wc *WishlistController) GetWishlist(c *gin.Context) {
 		return
 	}
 
-	// Convert userID to ObjectID
-	userOIDHex := userID.(string)
-	userOID, err := primitive.ObjectIDFromHex(userOIDHex)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+	// Get user role from token
+	userRole, roleExists := c.Get("role")
+	if !roleExists {
+		userRole = "user" // default role
+	}
+
+	wishlistService := NewWishlistService()
+
+	// Validate user role
+	if err := wishlistService.ValidateUserRole(userRole.(string)); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
-			"message": "User ID không hợp lệ",
+			"message": err.Error(),
 		})
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("Wishlists")
-
-	var wishlist models.Wishlist
-	err = collection.FindOne(ctx, bson.M{"user_id": userOID}).Decode(&wishlist)
+	result, err := wishlistService.GetUserWishlist(userID.(string))
 	if err != nil {
-		// Nếu không tìm thấy wishlist, tạo mới
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"data": gin.H{
-				"user_id": userOID,
-				"items":   []models.WishlistItem{},
-			},
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
 		})
 		return
+	}
+
+	message := ""
+	if result.Count == 0 {
+		message = "Wishlist is empty"
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    wishlist,
+		"data":    result.Items,
+		"count":   result.Count,
+		"message": message,
 	})
 }
 
 // AddToWishlist thêm sản phẩm vào wishlist
 func (wc *WishlistController) AddToWishlist(c *gin.Context) {
-	log.Printf("AddToWishlist called")
-
-	var request struct {
-		ProductID string `json:"product_id" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		log.Printf("Binding error: %v", err)
+	var req AddToWishlistRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": "Dữ liệu không hợp lệ: " + err.Error(),
@@ -81,8 +80,6 @@ func (wc *WishlistController) AddToWishlist(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Request ProductID: %s", request.ProductID)
-
 	// Get user ID from token
 	userID, exists := c.Get("userID")
 	if !exists {
@@ -93,127 +90,75 @@ func (wc *WishlistController) AddToWishlist(c *gin.Context) {
 		return
 	}
 
-	// Convert productID to ObjectID
-	productOID, err := primitive.ObjectIDFromHex(request.ProductID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+	// Get user role from token
+	userRole, roleExists := c.Get("role")
+	if !roleExists {
+		userRole = "user" // default role
+	}
+
+	wishlistService := NewWishlistService()
+
+	// Validate user role
+	if err := wishlistService.ValidateUserRole(userRole.(string)); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
-			"message": "Product ID không hợp lệ",
+			"message": err.Error(),
 		})
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("Wishlists")
-
-	// Kiểm tra xem sản phẩm có tồn tại không
-	productCollection := db.Collection("Products")
-	var product models.Product
-	err = productCollection.FindOne(ctx, bson.M{"_id": productOID}).Decode(&product)
+	result, err := wishlistService.AddProductToWishlist(userID.(string), req.ProductID)
 	if err != nil {
-		log.Printf("Product not found, error: %v", err)
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"message": "Không tìm thấy sản phẩm: " + err.Error(),
-		})
-		return
-	}
-
-	log.Printf("Product found: %s", product.Name)
-
-	// Convert userID to ObjectID để query
-	userOIDHex := userID.(string)
-	userOID, err := primitive.ObjectIDFromHex(userOIDHex)
-	if err != nil {
-		log.Printf("Invalid userID format: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "User ID không hợp lệ",
-		})
-		return
-	}
-
-	// Tìm wishlist của user bằng ObjectID
-	var wishlist models.Wishlist
-	err = collection.FindOne(ctx, bson.M{"user_id": userOID}).Decode(&wishlist)
-
-	log.Printf("Wishlist lookup result - error: %v", err)
-
-	newItem := models.WishlistItem{
-		ProductID:    productOID.Hex(),
-		ProductName:  product.Name,
-		ProductImage: product.Image,
-		ProductSlug:  product.Slug,
-		Price:        product.Price,
-		AddedAt:      time.Now(),
-	}
-
-	if err != nil {
-		// Tạo wishlist mới nếu chưa có
-		log.Printf("Creating new wishlist for user: %s", userOID.Hex())
-
-		wishlist = models.Wishlist{
-			UserID:    userOID,
-			Items:     []models.WishlistItem{newItem},
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		}
-
-		result, err := collection.InsertOne(ctx, wishlist)
-		if err != nil {
-			log.Printf("Error creating wishlist: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+		// Handle specific error types
+		if err.Error() == "product_id là bắt buộc" {
+			c.JSON(http.StatusBadRequest, gin.H{
 				"success": false,
-				"message": "Lỗi khi tạo wishlist: " + err.Error(),
+				"message": err.Error(),
 			})
 			return
 		}
 
-		wishlist.ID = result.InsertedID.(primitive.ObjectID)
-	} else {
-		// Kiểm tra xem sản phẩm đã có trong wishlist chưa
-		for _, item := range wishlist.Items {
-			if item.ProductID == productOID.Hex() {
-				c.JSON(http.StatusConflict, gin.H{
-					"success": false,
-					"message": "Sản phẩm đã có trong wishlist",
-				})
-				return
-			}
-		}
-
-		// Thêm sản phẩm vào wishlist
-		update := bson.M{
-			"$push": bson.M{"items": newItem},
-			"$set":  bson.M{"updatedAt": time.Now()},
-		}
-
-		_, err = collection.UpdateOne(ctx, bson.M{"_id": wishlist.ID}, update)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+		if err.Error() == "sản phẩm không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
 				"success": false,
-				"message": "Lỗi khi thêm sản phẩm vào wishlist",
+				"message": err.Error(),
 			})
 			return
 		}
 
-		wishlist.Items = append(wishlist.Items, newItem)
-		wishlist.UpdatedAt = time.Now()
+		if err.Error() == "sản phẩm đã có trong wishlist" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Thêm sản phẩm vào wishlist thành công",
-		"data":    wishlist,
+		"message": "Đã thêm vào wishlist",
+		"data":    result.Items,
+		"count":   result.Count,
 	})
 }
 
 // RemoveFromWishlist xóa sản phẩm khỏi wishlist
 func (wc *WishlistController) RemoveFromWishlist(c *gin.Context) {
-	productID := c.Param("productId")
+	var req RemoveFromWishlistRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Dữ liệu không hợp lệ: " + err.Error(),
+		})
+		return
+	}
 
 	// Get user ID from token
 	userID, exists := c.Get("userID")
@@ -225,59 +170,47 @@ func (wc *WishlistController) RemoveFromWishlist(c *gin.Context) {
 		return
 	}
 
-	// Convert userID to ObjectID
-	userOIDHex := userID.(string)
-	userOID, err := primitive.ObjectIDFromHex(userOIDHex)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+	// Get user role from token
+	userRole, roleExists := c.Get("role")
+	if !roleExists {
+		userRole = "user" // default role
+	}
+
+	wishlistService := NewWishlistService()
+
+	// Validate user role
+	if err := wishlistService.ValidateUserRole(userRole.(string)); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
-			"message": "User ID không hợp lệ",
+			"message": err.Error(),
 		})
 		return
 	}
 
-	// Convert productID to ObjectID
-	productOID, err := primitive.ObjectIDFromHex(productID)
+	result, err := wishlistService.RemoveProductFromWishlist(userID.(string), req.ProductID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Product ID không hợp lệ",
-		})
-		return
-	}
+		// Handle specific error types
+		if err.Error() == "wishlist không tồn tại" ||
+			err.Error() == "sản phẩm không có trong wishlist" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("Wishlists")
-
-	// Xóa sản phẩm khỏi wishlist
-	update := bson.M{
-		"$pull": bson.M{"items": bson.M{"product_id": productOID.Hex()}},
-		"$set":  bson.M{"updatedAt": time.Now()},
-	}
-
-	result, err := collection.UpdateOne(ctx, bson.M{"user_id": userOID}, update)
-	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Lỗi khi xóa sản phẩm khỏi wishlist",
-		})
-		return
-	}
-
-	if result.MatchedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"message": "Không tìm thấy wishlist",
+			"message": "Internal server error",
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Xóa sản phẩm khỏi wishlist thành công",
+		"message": "Đã xóa sản phẩm khỏi wishlist",
+		"data":    result.Items,
+		"count":   result.Count,
 	})
 }
 
@@ -293,50 +226,36 @@ func (wc *WishlistController) ClearWishlist(c *gin.Context) {
 		return
 	}
 
-	// Convert userID to ObjectID
-	userOIDHex := userID.(string)
-	userOID, err := primitive.ObjectIDFromHex(userOIDHex)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+	// Get user role from token
+	userRole, roleExists := c.Get("role")
+	if !roleExists {
+		userRole = "user" // default role
+	}
+
+	wishlistService := NewWishlistService()
+
+	// Validate user role
+	if err := wishlistService.ValidateUserRole(userRole.(string)); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
-			"message": "User ID không hợp lệ",
+			"message": err.Error(),
 		})
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("Wishlists")
-
-	// Xóa toàn bộ items trong wishlist
-	update := bson.M{
-		"$set": bson.M{
-			"items":     []models.WishlistItem{},
-			"updatedAt": time.Now(),
-		},
-	}
-
-	result, err := collection.UpdateOne(ctx, bson.M{"user_id": userOID}, update)
+	result, err := wishlistService.ClearUserWishlist(userID.(string))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Lỗi khi xóa wishlist",
-		})
-		return
-	}
-
-	if result.MatchedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"message": "Không tìm thấy wishlist",
+			"message": "Internal server error",
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Xóa toàn bộ wishlist thành công",
+		"message": "Đã xóa toàn bộ wishlist",
+		"data":    result.Items,
+		"count":   result.Count,
 	})
 }

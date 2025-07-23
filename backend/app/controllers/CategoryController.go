@@ -1,38 +1,56 @@
 package controllers
 
 import (
-	"context"
 	"net/http"
-	"time"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mingfulsnack/app/config"
 	"github.com/mingfulsnack/app/models"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// CategoryController handles category-related operations
+// CategoryController handles category-related HTTP requests
 type CategoryController struct{}
+
+// CreateCategoryRequest struct for creating categories
+type CreateCategoryRequest struct {
+	Name       string `json:"name" binding:"required"`
+	CategoryID string `json:"id,omitempty"`
+}
+
+// UpdateCategoryRequest struct for updating categories
+type UpdateCategoryRequest struct {
+	Name       string `json:"name,omitempty"`
+	CategoryID string `json:"id,omitempty"`
+}
 
 // GetAllCategories lấy tất cả categories
 func (cc *CategoryController) GetAllCategories(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("categories")
-
-	cursor, err := collection.Find(ctx, bson.M{})
+	categoryService := NewCategoryService()
+	categories, err := categoryService.GetAllCategories()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch categories"})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to fetch categories",
+		})
 		return
 	}
-	defer cursor.Close(ctx)
 
-	var categories []models.Category
-	if err = cursor.All(ctx, &categories); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode categories"})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    categories,
+		"count":   len(categories),
+	})
+}
+
+// GetCategoriesWithStats lấy categories với thống kê sản phẩm
+func (cc *CategoryController) GetCategoriesWithStats(c *gin.Context) {
+	categoryService := NewCategoryService()
+	categories, err := categoryService.GetCategoriesWithStats()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Failed to fetch categories with stats",
+		})
 		return
 	}
 
@@ -47,24 +65,49 @@ func (cc *CategoryController) GetAllCategories(c *gin.Context) {
 func (cc *CategoryController) GetCategoryByID(c *gin.Context) {
 	id := c.Param("id")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	categoryService := NewCategoryService()
+	category, err := categoryService.GetCategoryByID(id)
+	if err != nil {
+		if err.Error() == "category không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 
-	db := config.GetDB()
-	collection := db.Collection("categories")
-
-	var category models.Category
-	var err error
-
-	// Try to find by ObjectID first, then by CategoryID
-	if objectID, parseErr := primitive.ObjectIDFromHex(id); parseErr == nil {
-		err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&category)
-	} else {
-		err = collection.FindOne(ctx, bson.M{"id": id}).Decode(&category)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
 	}
 
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    category,
+	})
+}
+
+// GetCategoryBySlug lấy category theo slug
+func (cc *CategoryController) GetCategoryBySlug(c *gin.Context) {
+	slug := c.Param("slug")
+
+	categoryService := NewCategoryService()
+	category, err := categoryService.GetCategoryBySlug(slug)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Category not found"})
+		if err.Error() == "category không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
 		return
 	}
 
@@ -76,33 +119,45 @@ func (cc *CategoryController) GetCategoryByID(c *gin.Context) {
 
 // CreateCategory tạo category mới
 func (cc *CategoryController) CreateCategory(c *gin.Context) {
-	var category models.Category
-
-	if err := c.ShouldBindJSON(&category); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var req CreateCategoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Dữ liệu không hợp lệ: " + err.Error(),
+		})
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	categoryData := models.Category{
+		Name:       req.Name,
+		CategoryID: req.CategoryID,
+	}
 
-	// Set timestamps
-	category.CreatedAt = time.Now()
-	category.UpdatedAt = time.Now()
-
-	db := config.GetDB()
-	collection := db.Collection("categories")
-
-	result, err := collection.InsertOne(ctx, category)
+	categoryService := NewCategoryService()
+	category, err := categoryService.CreateCategory(categoryData)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create category"})
+		// Handle specific error types
+		if err.Error() == "tên category đã tồn tại" ||
+			err.Error() == "tên category là bắt buộc" ||
+			err.Error() == "tên category phải có ít nhất 2 ký tự" ||
+			err.Error() == "tên category không được vượt quá 100 ký tự" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
 		return
 	}
 
-	category.ID = result.InsertedID.(primitive.ObjectID)
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
-		"message": "Category created successfully",
+		"message": "Tạo category thành công",
 		"data":    category,
 	})
 }
@@ -111,43 +166,54 @@ func (cc *CategoryController) CreateCategory(c *gin.Context) {
 func (cc *CategoryController) UpdateCategory(c *gin.Context) {
 	id := c.Param("id")
 
-	var updateData bson.M
-	if err := c.ShouldBindJSON(&updateData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var req UpdateCategoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Dữ liệu không hợp lệ: " + err.Error(),
+		})
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Add update timestamp
-	updateData["updated_at"] = time.Now()
-
-	db := config.GetDB()
-	collection := db.Collection("categories")
-
-	var filter bson.M
-	if objectID, parseErr := primitive.ObjectIDFromHex(id); parseErr == nil {
-		filter = bson.M{"_id": objectID}
-	} else {
-		filter = bson.M{"id": id}
+	updateData := models.Category{
+		Name:       req.Name,
+		CategoryID: req.CategoryID,
 	}
 
-	update := bson.M{"$set": updateData}
-	result, err := collection.UpdateOne(ctx, filter, update)
+	categoryService := NewCategoryService()
+	category, err := categoryService.UpdateCategory(id, updateData)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update category"})
-		return
-	}
+		// Handle specific error types
+		if err.Error() == "category không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 
-	if result.MatchedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Category not found"})
+		if err.Error() == "tên category đã tồn tại" ||
+			err.Error() == "tên category là bắt buộc" ||
+			err.Error() == "tên category phải có ít nhất 2 ký tự" ||
+			err.Error() == "tên category không được vượt quá 100 ký tự" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Category updated successfully",
+		"message": "Cập nhật category thành công",
+		"data":    category,
 	})
 }
 
@@ -155,32 +221,94 @@ func (cc *CategoryController) UpdateCategory(c *gin.Context) {
 func (cc *CategoryController) DeleteCategory(c *gin.Context) {
 	id := c.Param("id")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("categories")
-
-	var filter bson.M
-	if objectID, parseErr := primitive.ObjectIDFromHex(id); parseErr == nil {
-		filter = bson.M{"_id": objectID}
-	} else {
-		filter = bson.M{"id": id}
-	}
-
-	result, err := collection.DeleteOne(ctx, filter)
+	categoryService := NewCategoryService()
+	err := categoryService.DeleteCategory(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete category"})
-		return
-	}
+		// Handle specific error types
+		if err.Error() == "category không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 
-	if result.DeletedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Category not found"})
+		if err.Error() == "invalid category ID" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		// Check if it's a products in category error
+		if err.Error()[:41] == "không thể xóa category vì có" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Category deleted successfully",
+		"message": "Xóa category thành công",
+	})
+}
+
+// GetProductsByCategory lấy sản phẩm theo category
+func (cc *CategoryController) GetProductsByCategory(c *gin.Context) {
+	categoryID := c.Param("id")
+
+	// Get pagination parameters
+	pageStr := c.DefaultQuery("page", "1")
+	limitStr := c.DefaultQuery("limit", "12")
+
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		page = 1
+	}
+
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 {
+		limit = 12
+	}
+
+	categoryService := NewCategoryService()
+	result, err := categoryService.GetProductsByCategory(categoryID, page, limit)
+	if err != nil {
+		if err.Error() == "category không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+
+	totalPages := (result.Total + limit - 1) / limit
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result.Categories,
+		"pagination": gin.H{
+			"current_page":   page,
+			"total_pages":    totalPages,
+			"total_items":    result.Total,
+			"items_per_page": limit,
+		},
 	})
 }

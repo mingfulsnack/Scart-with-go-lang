@@ -1,34 +1,42 @@
 package controllers
 
 import (
-	"context"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mingfulsnack/app/config"
 	"github.com/mingfulsnack/app/models"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type OrderController struct{}
 
+// CreateOrderRequest struct for creating orders
+type CreateOrderRequest struct {
+	ShippingAddress string `json:"shipping_address" binding:"required"`
+	Phone           string `json:"phone"`
+	CustomerPhone   string `json:"customer_phone"`
+	CustomerName    string `json:"customer_name"`
+	CustomerEmail   string `json:"customer_email"`
+	PaymentMethod   string `json:"payment_method"`
+	Notes           string `json:"notes"`
+}
+
+// UpdateOrderStatusRequest struct for updating order status
+type UpdateOrderStatusRequest struct {
+	Status string `json:"status" binding:"required"`
+}
+
 // OrderResponse struct for pagination
 type OrderResponse struct {
 	Success    bool                   `json:"success"`
-	Data       []models.Order         `json:"data"`
+	Data       []interface{}          `json:"data"`
 	Pagination map[string]interface{} `json:"pagination"`
 }
 
-// CreateOrder tạo đơn hàng mới
+// CreateOrder tạo đơn hàng mới từ giỏ hàng
 func (oc *OrderController) CreateOrder(c *gin.Context) {
-	var order models.Order
-
-	if err := c.ShouldBindJSON(&order); err != nil {
+	var req CreateOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": "Dữ liệu không hợp lệ: " + err.Error(),
@@ -46,29 +54,54 @@ func (oc *OrderController) CreateOrder(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	orderService := NewOrderService()
 
-	// Set order data
-	userOID := userID.(primitive.ObjectID)
-	order.UserID = &userOID
-	order.CreatedAt = time.Now()
-	order.UpdatedAt = time.Now()
-	order.Status = "pending"
+	// Validate order data
+	orderData := CreateOrderData{
+		ShippingAddress: req.ShippingAddress,
+		Phone:           req.Phone,
+		CustomerPhone:   req.CustomerPhone,
+		CustomerName:    req.CustomerName,
+		CustomerEmail:   req.CustomerEmail,
+		PaymentMethod:   req.PaymentMethod,
+		Notes:           req.Notes,
+	}
 
-	db := config.GetDB()
-	collection := db.Collection("orders")
-
-	result, err := collection.InsertOne(ctx, order)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+	if err := orderService.ValidateOrderData(orderData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "Lỗi khi tạo đơn hàng",
+			"message": err.Error(),
 		})
 		return
 	}
 
-	order.ID = result.InsertedID.(primitive.ObjectID)
+	// Create order from cart
+	order, err := orderService.CreateOrderFromCart(userID.(string), orderData)
+	if err != nil {
+		// Handle specific error types
+		if err.Error() == "giỏ hàng trống" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		if err.Error() == "địa chỉ giao hàng và số điện thoại là bắt buộc" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"message": "Tạo đơn hàng thành công",
@@ -88,9 +121,6 @@ func (oc *OrderController) GetOrders(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// Parse query parameters
 	pageStr := c.DefaultQuery("page", "1")
 	limitStr := c.DefaultQuery("limit", "10")
@@ -105,60 +135,30 @@ func (oc *OrderController) GetOrders(c *gin.Context) {
 		limit = 10
 	}
 
-	db := config.GetDB()
-	collection := db.Collection("orders")
-
-	filter := bson.M{"userId": userID}
-
-	// Build sort options
-	sortOptions := options.Find()
-	sortOptions.SetSort(bson.D{{Key: "createdAt", Value: -1}})
-
-	// Apply pagination
-	skip := (page - 1) * limit
-	sortOptions.SetSkip(int64(skip)).SetLimit(int64(limit))
-
-	cursor, err := collection.Find(ctx, filter, sortOptions)
+	orderService := NewOrderService()
+	result, err := orderService.GetUserOrders(userID.(string), page, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Lỗi khi lấy danh sách đơn hàng",
+			"message": "Internal server error",
 		})
 		return
 	}
-	defer cursor.Close(ctx)
-
-	var orders []models.Order
-	if err = cursor.All(ctx, &orders); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Lỗi khi decode đơn hàng",
-		})
-		return
-	}
-
-	// Count total
-	total, err := collection.CountDocuments(ctx, filter)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Lỗi khi đếm đơn hàng",
-		})
-		return
-	}
-
-	totalPages := (int(total) + limit - 1) / limit
 
 	c.JSON(http.StatusOK, OrderResponse{
-		Success: true,
-		Data:    orders,
-		Pagination: map[string]interface{}{
-			"current_page":   page,
-			"total_pages":    totalPages,
-			"total_items":    total,
-			"items_per_page": limit,
-		},
+		Success:    true,
+		Data:       convertOrdersToInterface(result.Orders),
+		Pagination: result.Pagination,
 	})
+}
+
+// Helper function to convert orders to interface{} slice
+func convertOrdersToInterface(orders []models.Order) []interface{} {
+	data := make([]interface{}, len(orders))
+	for i, order := range orders {
+		data[i] = order
+	}
+	return data
 }
 
 // GetOrderByID lấy chi tiết đơn hàng theo ID
@@ -175,42 +175,21 @@ func (oc *OrderController) GetOrderByID(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("orders")
-
-	var order models.Order
-	var err error
-
-	// Try to find by ObjectID first
-	if objectID, parseErr := primitive.ObjectIDFromHex(id); parseErr == nil {
-		filter := bson.M{"_id": objectID, "userId": userID}
-		err = collection.FindOne(ctx, filter).Decode(&order)
-	} else {
-		// If not valid ObjectID, try to find by order number or other string ID
-		filter := bson.M{
-			"$or": []bson.M{
-				{"orderNumber": id, "userId": userID},
-				{"_id": id, "userId": userID}, // Try string ID as well
-			},
-		}
-		err = collection.FindOne(ctx, filter).Decode(&order)
-	}
-
+	orderService := NewOrderService()
+	order, err := orderService.GetOrderByID(id, userID.(string))
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
+		if err.Error() == "đơn hàng không tồn tại" {
 			c.JSON(http.StatusNotFound, gin.H{
 				"success": false,
-				"message": "Không tìm thấy đơn hàng",
+				"message": err.Error(),
 			})
-		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"message": "Lỗi khi tìm đơn hàng: " + err.Error(),
-			})
+			return
 		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
 		return
 	}
 
@@ -224,11 +203,8 @@ func (oc *OrderController) GetOrderByID(c *gin.Context) {
 func (oc *OrderController) UpdateOrderStatus(c *gin.Context) {
 	id := c.Param("id")
 
-	var updateData struct {
-		Status string `json:"status" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&updateData); err != nil {
+	var req UpdateOrderStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": "Dữ liệu không hợp lệ: " + err.Error(),
@@ -236,43 +212,30 @@ func (oc *OrderController) UpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("orders")
-
-	var filter bson.M
-	if objectID, parseErr := primitive.ObjectIDFromHex(id); parseErr == nil {
-		filter = bson.M{"_id": objectID}
-	} else {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "ID không hợp lệ",
-		})
-		return
-	}
-
-	update := bson.M{
-		"$set": bson.M{
-			"status":    updateData.Status,
-			"updatedAt": time.Now(),
-		},
-	}
-
-	result, err := collection.UpdateOne(ctx, filter, update)
+	orderService := NewOrderService()
+	order, err := orderService.UpdateOrderStatus(id, req.Status, "")
 	if err != nil {
+		// Handle specific error types
+		if err.Error() == "đơn hàng không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		if err.Error() == "trạng thái không hợp lệ" ||
+			err.Error() == "không thể thay đổi trạng thái đơn hàng đã hoàn thành hoặc đã hủy" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Lỗi khi cập nhật đơn hàng",
-		})
-		return
-	}
-
-	if result.MatchedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"message": "Không tìm thấy đơn hàng",
+			"message": "Internal server error",
 		})
 		return
 	}
@@ -280,14 +243,12 @@ func (oc *OrderController) UpdateOrderStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Cập nhật trạng thái đơn hàng thành công",
+		"data":    order,
 	})
 }
 
 // GetAllOrders lấy tất cả đơn hàng (Admin only)
 func (oc *OrderController) GetAllOrders(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// Parse query parameters
 	pageStr := c.DefaultQuery("page", "1")
 	limitStr := c.DefaultQuery("limit", "10")
@@ -303,63 +264,32 @@ func (oc *OrderController) GetAllOrders(c *gin.Context) {
 		limit = 10
 	}
 
-	db := config.GetDB()
-	collection := db.Collection("orders")
-
-	// Build filter
-	filter := bson.M{}
+	// Build filters
+	filters := make(map[string]interface{})
 	if status != "" {
-		filter["status"] = status
+		filters["status"] = status
 	}
 
-	// Build sort options
-	sortOptions := options.Find()
-	sortOptions.SetSort(bson.D{{Key: "createdAt", Value: -1}})
-
-	// Apply pagination
-	skip := (page - 1) * limit
-	sortOptions.SetSkip(int64(skip)).SetLimit(int64(limit))
-
-	cursor, err := collection.Find(ctx, filter, sortOptions)
+	orderService := NewOrderService()
+	result, err := orderService.GetAllOrders(page, limit, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Lỗi khi lấy danh sách đơn hàng",
-		})
-		return
-	}
-	defer cursor.Close(ctx)
-
-	var orders []models.Order
-	if err = cursor.All(ctx, &orders); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Lỗi khi decode đơn hàng",
+			"message": "Internal server error",
 		})
 		return
 	}
 
-	// Count total
-	total, err := collection.CountDocuments(ctx, filter)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Lỗi khi đếm đơn hàng",
-		})
-		return
+	// Convert to interface{} slice for response
+	data := make([]interface{}, len(result.Orders))
+	for i, order := range result.Orders {
+		data[i] = order
 	}
-
-	totalPages := (int(total) + limit - 1) / limit
 
 	c.JSON(http.StatusOK, OrderResponse{
-		Success: true,
-		Data:    orders,
-		Pagination: map[string]interface{}{
-			"current_page":   page,
-			"total_pages":    totalPages,
-			"total_items":    total,
-			"items_per_page": limit,
-		},
+		Success:    true,
+		Data:       data,
+		Pagination: result.Pagination,
 	})
 }
 
@@ -377,43 +307,29 @@ func (oc *OrderController) CancelOrder(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("orders")
-
-	var filter bson.M
-	if objectID, parseErr := primitive.ObjectIDFromHex(id); parseErr == nil {
-		filter = bson.M{"_id": objectID, "userId": userID}
-	} else {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "ID không hợp lệ",
-		})
-		return
-	}
-
-	update := bson.M{
-		"$set": bson.M{
-			"status":    "cancelled",
-			"updatedAt": time.Now(),
-		},
-	}
-
-	result, err := collection.UpdateOne(ctx, filter, update)
+	orderService := NewOrderService()
+	order, err := orderService.CancelOrder(id, userID.(string))
 	if err != nil {
+		// Handle specific error types
+		if err.Error() == "đơn hàng không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		if err.Error() == "chỉ có thể hủy đơn hàng đang chờ xử lý" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Lỗi khi hủy đơn hàng",
-		})
-		return
-	}
-
-	if result.MatchedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"message": "Không tìm thấy đơn hàng",
+			"message": "Internal server error",
 		})
 		return
 	}
@@ -421,5 +337,6 @@ func (oc *OrderController) CancelOrder(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Hủy đơn hàng thành công",
+		"data":    order,
 	})
 }
