@@ -3,12 +3,14 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/mingfulsnack/app/config"
 	"github.com/mingfulsnack/app/models"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // WishlistService handles business logic for wishlist operations
@@ -76,19 +78,17 @@ func (ws *WishlistService) FindProductByID(productID string) (*models.Product, e
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Convert productID to ObjectID
-	productOID, err := primitive.ObjectIDFromHex(productID)
-	if err != nil {
-		return nil, errors.New("product ID không hợp lệ")
-	}
-
 	db := config.GetDB()
 	collection := db.Collection("Products")
 
 	var product models.Product
-	err = collection.FindOne(ctx, bson.M{"_id": productOID}).Decode(&product)
+	// Search by the 'id' field (not '_id') which contains product IDs like "P001", "P002", etc.
+	err := collection.FindOne(ctx, bson.M{"id": productID}).Decode(&product)
 	if err != nil {
-		return nil, errors.New("sản phẩm không tồn tại")
+		if err == mongo.ErrNoDocuments {
+			return nil, errors.New("sản phẩm không tồn tại")
+		}
+		return nil, fmt.Errorf("lỗi tìm kiếm sản phẩm: %v", err)
 	}
 
 	return &product, nil

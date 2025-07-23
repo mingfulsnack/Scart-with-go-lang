@@ -8,7 +8,7 @@ import (
 
 // SetupCompareRoutes thiết lập routes cho compare
 func SetupCompareRoutes(rg *gin.RouterGroup) {
-	compareController := &controllers.CompareController{}
+	compareController := controllers.NewCompareController()
 
 	compare := rg.Group("/compare")
 	compare.Use(middleware.AuthMiddleware()) // Tất cả compare routes đều cần auth

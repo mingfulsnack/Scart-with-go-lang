@@ -1,12 +1,18 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
 
 type WishlistController struct{}
+
+// NewWishlistController tạo instance mới của WishlistController
+func NewWishlistController() *WishlistController {
+	return &WishlistController{}
+}
 
 // AddToWishlistRequest struct for adding products to wishlist
 type AddToWishlistRequest struct {
@@ -80,6 +86,9 @@ func (wc *WishlistController) AddToWishlist(c *gin.Context) {
 		return
 	}
 
+	// Debug: log the received request
+	fmt.Printf("AddToWishlist - Received ProductID: %s\n", req.ProductID)
+
 	// Get user ID from token
 	userID, exists := c.Get("userID")
 	if !exists {
@@ -90,16 +99,21 @@ func (wc *WishlistController) AddToWishlist(c *gin.Context) {
 		return
 	}
 
+	fmt.Printf("AddToWishlist - UserID: %s\n", userID.(string))
+
 	// Get user role from token
 	userRole, roleExists := c.Get("role")
 	if !roleExists {
 		userRole = "user" // default role
 	}
 
+	fmt.Printf("AddToWishlist - UserRole: %s\n", userRole.(string))
+
 	wishlistService := NewWishlistService()
 
 	// Validate user role
 	if err := wishlistService.ValidateUserRole(userRole.(string)); err != nil {
+		fmt.Printf("AddToWishlist - Role validation error: %s\n", err.Error())
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": err.Error(),
@@ -107,8 +121,10 @@ func (wc *WishlistController) AddToWishlist(c *gin.Context) {
 		return
 	}
 
+	fmt.Printf("AddToWishlist - Calling service with UserID: %s, ProductID: %s\n", userID.(string), req.ProductID)
 	result, err := wishlistService.AddProductToWishlist(userID.(string), req.ProductID)
 	if err != nil {
+		fmt.Printf("AddToWishlist - Service error: %s\n", err.Error())
 		// Handle specific error types
 		if err.Error() == "product_id là bắt buộc" {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -136,10 +152,12 @@ func (wc *WishlistController) AddToWishlist(c *gin.Context) {
 
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Internal server error",
+			"message": "Internal server error: " + err.Error(),
 		})
 		return
 	}
+
+	fmt.Printf("AddToWishlist - Success: %+v\n", result)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

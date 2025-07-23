@@ -20,14 +20,37 @@ function OrderDetail() {
   const [viewType, setViewType] = useState(isLoggedIn ? 'my-orders' : 'search') // my-orders hoặc search
 
   useEffect(() => {
-    // Auto search if orderNumber is provided in URL
-    if (orderNumber) {
-      handleSearchByNumber(orderNumber)
-    } else if (emailParam) {
-      handleSearchByEmail(emailParam)
-    } else if (isLoggedIn && viewType === 'my-orders') {
-      // Auto load my orders for logged in users
-      handleGetMyOrders()
+    console.log('OrderDetail useEffect triggered', { orderNumber, emailParam, isLoggedIn, viewType })
+    
+    // Prevent infinite loops by adding a flag
+    let isMounted = true
+    
+    const loadData = async () => {
+      if (!isMounted) return
+      
+      try {
+        // Auto search if orderNumber is provided in URL
+        if (orderNumber) {
+          console.log('Auto searching by order number:', orderNumber)
+          await handleSearchByNumber(orderNumber)
+        } else if (emailParam) {
+          console.log('Auto searching by email:', emailParam)
+          await handleSearchByEmail(emailParam)
+        } else if (isLoggedIn && viewType === 'my-orders') {
+          // Auto load my orders for logged in users
+          console.log('Auto loading my orders for logged in user')
+          await handleGetMyOrders()
+        }
+      } catch (error) {
+        console.error('Error in useEffect:', error)
+      }
+    }
+    
+    loadData()
+    
+    // Cleanup function
+    return () => {
+      isMounted = false
     }
   }, [orderNumber, emailParam, isLoggedIn, viewType])
 
@@ -44,9 +67,17 @@ function OrderDetail() {
       setLoading(true)
       const response = await orderAPI.getMyOrders()
       
+      console.log('API Response:', response.data) // Debug log
+      
       if (response.data.success) {
-        setOrders(response.data.data)
+        // Make sure data is an array before setting
+        const ordersData = Array.isArray(response.data.data) ? response.data.data : []
+        console.log('Orders data:', ordersData) // Debug log
+        setOrders(ordersData)
         setOrder(null)
+      } else {
+        console.error('API returned success: false')
+        setOrders([])
       }
     } catch (error) {
       console.error('Get my orders error:', error)
@@ -58,6 +89,7 @@ function OrderDetail() {
 Required roles: ${errorData.required_roles?.join(', ') || 'customer'}
 Your role: ${errorData.your_role || 'unknown'}`)
       } else {
+        console.error('Error details:', error.response?.data)
         alert(error.response?.data?.message || 'Unable to load your orders')
       }
       setOrders([])
@@ -124,17 +156,29 @@ Your role: ${errorData.your_role || 'unknown'}`)
   }
 
   const formatPrice = (price) => {
-    return `$${price.toString().replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1,")}`
+    if (price === null || price === undefined || isNaN(price)) {
+      return "$0"
+    }
+    const numPrice = Number(price)
+    return `$${numPrice.toString().replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1,")}`
   }
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
+    if (!dateString) {
+      return 'N/A'
+    }
+    try {
+      return new Date(dateString).toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    } catch (error) {
+      console.warn('Date formatting error:', error)
+      return 'Invalid Date'
+    }
   }
 
   const getStatusBadge = (status) => {
@@ -150,85 +194,124 @@ Your role: ${errorData.your_role || 'unknown'}`)
     return statusClasses[status] || 'badge bg-secondary'
   }
 
-  const renderOrderCard = (orderData) => (
-    <div key={orderData.order_id || orderData._id} className="card mb-4">
-      <div className="card-header d-flex justify-content-between align-items-center">
-        <h5 className="mb-0">Order #{orderData.order_number}</h5>
-        <span className={getStatusBadge(orderData.status)}>
-          {orderData.status.toUpperCase()}
-        </span>
-      </div>
-      <div className="card-body">
-        <div className="row">
-          <div className="col-md-6">
-            <h6>Order Information</h6>
-            <p><strong>Date:</strong> {formatDate(orderData.order_date || orderData.createdAt)}</p>
-            <p><strong>Total:</strong> {formatPrice(orderData.total_amount)}</p>
-            <p><strong>Payment:</strong> {orderData.payment_method || orderData.payment?.method || 'Cash on Delivery'}</p>
-          </div>
-          <div className="col-md-6">
-            <h6>Shipping Address</h6>
-            <p><strong>Name:</strong> {orderData.shipping_address?.full_name}</p>
-            <p><strong>Phone:</strong> {orderData.shipping_address?.phone}</p>
-            <p><strong>Email:</strong> {orderData.shipping_address?.email}</p>
-            <p><strong>Address:</strong> {orderData.shipping_address?.street}</p>
-          </div>
+  const renderOrderCard = (orderData) => {
+    // Safety checks to prevent crashes
+    if (!orderData) {
+      console.warn('renderOrderCard called with null/undefined orderData')
+      return null
+    }
+
+    // Ensure required fields exist with defaults
+    const safeOrderData = {
+      order_id: orderData.order_id || orderData._id || 'unknown',
+      order_number: orderData.order_number || 'N/A',
+      status: orderData.status || 'pending',
+      order_date: orderData.order_date || orderData.createdAt || new Date().toISOString(),
+      total_amount: orderData.total_amount || 0,
+      payment_method: orderData.payment_method || orderData.payment?.method || 'Cash on Delivery',
+      shipping_address: orderData.shipping_address || {},
+      products: orderData.products || orderData.items || [],
+      notes: orderData.notes || orderData.customer_notes || '',
+      ...orderData
+    }
+
+    return (
+      <div key={safeOrderData.order_id} className="card mb-4">
+        <div className="card-header d-flex justify-content-between align-items-center">
+          <h5 className="mb-0">Order #{String(safeOrderData.order_number)}</h5>
+          <span className={getStatusBadge(safeOrderData.status)}>
+            {String(safeOrderData.status).toUpperCase()}
+          </span>
         </div>
-        
-        <h6 className="mt-3">Order Items</h6>
-        <div className="table-responsive">
-          <table className="table table-sm">
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>Quantity</th>
-                <th>Unit Price</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {/* Sử dụng products array từ cấu trúc mới */}
-              {(orderData.products || orderData.items || []).map((item, index) => (
-                <tr key={index}>
-                  <td>
-                    <div className="d-flex align-items-center">
-                      <img 
-                        src={item.product_image} 
-                        alt={item.product_name}
-                        style={{ width: '50px', height: '50px', objectFit: 'cover' }}
-                        className="me-2"
-                      />
-                      <div>
-                        <div>{item.product_name}</div>
-                        {item.category && (
-                          <small className="text-muted">{item.category}</small>
-                        )}
-                      </div>
-                    </div>
-                  </td>
-                  <td>{item.quantity}</td>
-                  <td>{formatPrice(item.unit_price)}</td>
-                  <td>{formatPrice(item.total_price)}</td>
+        <div className="card-body">
+          <div className="row">
+            <div className="col-md-6">
+              <h6>Order Information</h6>
+              <p><strong>Date:</strong> {formatDate(safeOrderData.order_date)}</p>
+              <p><strong>Total:</strong> {formatPrice(safeOrderData.total_amount)}</p>
+              <p><strong>Payment:</strong> {String(safeOrderData.payment_method)}</p>
+            </div>
+            <div className="col-md-6">
+              <h6>Shipping Address</h6>
+              <p><strong>Name:</strong> {String(safeOrderData.shipping_address?.full_name || 'N/A')}</p>
+              <p><strong>Phone:</strong> {String(safeOrderData.shipping_address?.phone || 'N/A')}</p>
+              <p><strong>Email:</strong> {String(safeOrderData.shipping_address?.email || 'N/A')}</p>
+              <p><strong>Address:</strong> {String(safeOrderData.shipping_address?.street || 'N/A')}</p>
+            </div>
+          </div>
+          
+          <h6 className="mt-3">Order Items</h6>
+          <div className="table-responsive">
+            <table className="table table-sm">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Quantity</th>
+                  <th>Unit Price</th>
+                  <th>Total</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        
-        {(orderData.notes || orderData.customer_notes) && (
-          <div className="mt-3">
-            <h6>Customer Notes</h6>
-            <p className="text-muted">{orderData.notes || orderData.customer_notes}</p>
+              </thead>
+              <tbody>
+                {safeOrderData.products.length > 0 ? (
+                  safeOrderData.products.map((item, index) => (
+                    <tr key={index}>
+                      <td>
+                        <div className="d-flex align-items-center">
+                          <img 
+                            src={item.product_image || '/placeholder.jpg'} 
+                            alt={String(item.product_name || 'Product')}
+                            style={{ width: '50px', height: '50px', objectFit: 'cover' }}
+                            className="me-2"
+                            onError={(e) => {
+                              e.target.src = '/placeholder.jpg'
+                            }}
+                          />
+                          <div>
+                            <div>{String(item.product_name || 'Unknown Product')}</div>
+                            {item.category && (
+                              <small className="text-muted">{String(item.category)}</small>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td>{String(item.quantity || 0)}</td>
+                      <td>{formatPrice(item.unit_price || 0)}</td>
+                      <td>{formatPrice(item.total_price || 0)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="4" className="text-center text-muted">No items found</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-        )}
+          
+          {safeOrderData.notes && (
+            <div className="mt-3">
+              <h6>Customer Notes</h6>
+              <p className="text-muted">{String(safeOrderData.notes)}</p>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   return (
     <div className="container py-5">
       <div className="row">
         <div className="col-12">
+          {/* Debug Info */}
+          <div style={{ backgroundColor: '#f8f9fa', padding: '10px', marginBottom: '20px', fontSize: '12px' }}>
+            <strong>Debug Info:</strong> isLoggedIn: {String(isLoggedIn)}, 
+            viewType: {String(viewType)}, 
+            orders: {String(orders.length)}, 
+            loading: {String(loading)},
+            user: {user ? user.username || 'User' : 'null'}
+          </div>
+
           {/* Breadcrumb */}
           <nav aria-label="breadcrumb">
             <ol className="breadcrumb">
@@ -252,7 +335,7 @@ Your role: ${errorData.your_role || 'unknown'}`)
                     }}
                   >
                     <i className="fas fa-user me-2"></i>
-                    My Orders ({user?.username})
+                    My Orders ({user?.username || 'User'})
                   </button>
                   
                 </div>
@@ -325,7 +408,7 @@ Your role: ${errorData.your_role || 'unknown'}`)
           )}
 
           {/* Single Order Result */}
-          {order && (
+          {order && !loading && (
             <div>
               <h4 className="mb-3">Order Details</h4>
               {renderOrderCard(order)}
@@ -333,7 +416,7 @@ Your role: ${errorData.your_role || 'unknown'}`)
           )}
 
           {/* Multiple Orders Result */}
-          {orders.length > 0 && (
+          {orders.length > 0 && !loading && (
             <div>
               <h4 className="mb-3">
                 {viewType === 'my-orders' ? `Your Orders (${orders.length})` : `Orders Found (${orders.length})`}

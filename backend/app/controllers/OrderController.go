@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -121,6 +122,8 @@ func (oc *OrderController) GetOrders(c *gin.Context) {
 		return
 	}
 
+	fmt.Printf("DEBUG: GetOrders - userID from JWT: %v\n", userID)
+
 	// Parse query parameters
 	pageStr := c.DefaultQuery("page", "1")
 	limitStr := c.DefaultQuery("limit", "10")
@@ -156,7 +159,59 @@ func (oc *OrderController) GetOrders(c *gin.Context) {
 func convertOrdersToInterface(orders []models.Order) []interface{} {
 	data := make([]interface{}, len(orders))
 	for i, order := range orders {
-		data[i] = order
+		// Transform Go model fields to match frontend expectations
+		orderMap := map[string]interface{}{
+			"_id":              order.ID,
+			"order_id":         order.ID.Hex(),
+			"order_number":     order.OrderNumber,
+			"user_id":          order.UserID,
+			"status":           order.Status,
+			"total_amount":     order.TotalAmount,
+			"subtotal":         order.Subtotal,
+			"tax_amount":       order.TaxAmount,
+			"shipping_amount":  order.ShippingAmount,
+			"discount_amount":  order.DiscountAmount,
+			"currency":         order.Currency,
+			"shipping_address": order.ShippingAddress,
+			"billing_address":  order.BillingAddress,
+			"payment":          order.Payment,
+			"payment_method":   order.Payment.Method,
+			"notes":            order.Notes,
+			"customer_notes":   "",
+			"tracking":         order.Tracking,
+			"shipped_at":       order.ShippedAt,
+			"delivered_at":     order.DeliveredAt,
+			"cancelled_at":     order.CancelledAt,
+			"order_date":       order.CreatedAt,
+			"createdAt":        order.CreatedAt,
+			"updatedAt":        order.UpdatedAt,
+		}
+
+		// Transform order items/products
+		products := make([]map[string]interface{}, len(order.Items))
+		for j, item := range order.Items {
+			products[j] = map[string]interface{}{
+				"_id":           item.ID,
+				"product_id":    item.ProductID,
+				"product_name":  item.ProductName,
+				"product_sku":   item.ProductSKU,
+				"product_image": "", // Add default empty image
+				"quantity":      item.Quantity,
+				"unit_price":    item.Price,
+				"price":         item.Price,
+				"total_price":   item.Total,
+				"total":         item.Total,
+			}
+		}
+		orderMap["products"] = products
+		orderMap["items"] = products // Provide both field names for compatibility
+
+		// Add customer notes from nested structure
+		if order.Notes != nil && order.Notes.Customer != "" {
+			orderMap["customer_notes"] = order.Notes.Customer
+		}
+
+		data[i] = orderMap
 	}
 	return data
 }
@@ -338,5 +393,60 @@ func (oc *OrderController) CancelOrder(c *gin.Context) {
 		"success": true,
 		"message": "Hủy đơn hàng thành công",
 		"data":    order,
+	})
+}
+
+// GetOrderByNumber lấy đơn hàng theo order number
+func (oc *OrderController) GetOrderByNumber(c *gin.Context) {
+	orderNumber := c.Param("orderNumber")
+
+	orderService := NewOrderService()
+	order, err := orderService.GetOrderByNumber(orderNumber)
+	if err != nil {
+		if err.Error() == "đơn hàng không tồn tại" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    order,
+	})
+}
+
+// GetOrdersByEmail lấy đơn hàng theo email
+func (oc *OrderController) GetOrdersByEmail(c *gin.Context) {
+	email := c.Query("email")
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Email là bắt buộc",
+		})
+		return
+	}
+
+	orderService := NewOrderService()
+	orders, err := orderService.GetOrdersByEmail(email)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Internal server error",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    orders,
 	})
 }

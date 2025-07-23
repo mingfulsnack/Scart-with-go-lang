@@ -8,7 +8,7 @@ import (
 
 // SetupWishlistRoutes thiết lập routes cho wishlist
 func SetupWishlistRoutes(rg *gin.RouterGroup) {
-	wishlistController := &controllers.WishlistController{}
+	wishlistController := controllers.NewWishlistController()
 
 	wishlist := rg.Group("/wishlist")
 	wishlist.Use(middleware.AuthMiddleware()) // Tất cả wishlist routes đều cần auth

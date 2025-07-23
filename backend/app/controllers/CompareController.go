@@ -8,6 +8,11 @@ import (
 
 type CompareController struct{}
 
+// NewCompareController tạo instance mới của CompareController
+func NewCompareController() *CompareController {
+	return &CompareController{}
+}
+
 // AddToCompareRequest struct for adding products to compare
 type AddToCompareRequest struct {
 	ProductID string `json:"product_id" binding:"required"`

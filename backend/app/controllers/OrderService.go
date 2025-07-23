@@ -61,7 +61,13 @@ func (os *OrderService) GetAllOrders(page, limit int, filters map[string]interfa
 	}
 
 	if userID, ok := filters["user_id"]; ok {
-		query["userId"] = userID
+		// Convert string userID to ObjectID for proper MongoDB query
+		if userOID, err := primitive.ObjectIDFromHex(userID.(string)); err == nil {
+			query["user_id"] = userOID
+		} else {
+			query["user_id"] = userID
+			fmt.Printf("DEBUG: Failed to convert userID to ObjectID: %v\n", err)
+		}
 	}
 
 	if dateFrom, ok := filters["date_from"]; ok {
@@ -88,12 +94,14 @@ func (os *OrderService) GetAllOrders(page, limit int, filters map[string]interfa
 
 	cursor, err := collection.Find(ctx, query, sortOptions)
 	if err != nil {
+		fmt.Printf("DEBUG: MongoDB Find error: %v\n", err)
 		return nil, errors.New("lỗi khi lấy danh sách đơn hàng")
 	}
 	defer cursor.Close(ctx)
 
 	var orders []models.Order
 	if err = cursor.All(ctx, &orders); err != nil {
+		fmt.Printf("DEBUG: Cursor decode error: %v\n", err)
 		return nil, errors.New("lỗi khi decode đơn hàng")
 	}
 
@@ -118,10 +126,21 @@ func (os *OrderService) GetAllOrders(page, limit int, filters map[string]interfa
 
 // GetUserOrders lấy đơn hàng của user
 func (os *OrderService) GetUserOrders(userID string, page, limit int) (*OrderResult, error) {
+	fmt.Printf("DEBUG: GetUserOrders called with userID: %s\n", userID)
+
 	filters := map[string]interface{}{
 		"user_id": userID,
 	}
-	return os.GetAllOrders(page, limit, filters)
+
+	result, err := os.GetAllOrders(page, limit, filters)
+	if err != nil {
+		fmt.Printf("DEBUG: GetAllOrders error: %v\n", err)
+		return nil, err
+	}
+
+	fmt.Printf("DEBUG: Found %d orders for user %s\n", len(result.Orders), userID)
+
+	return result, nil
 }
 
 // GetOrderByID lấy chi tiết đơn hàng
@@ -145,9 +164,9 @@ func (os *OrderService) GetOrderByID(orderID, userID string) (*models.Order, err
 	// Nếu không phải admin, chỉ được xem đơn hàng của mình
 	if userID != "" {
 		if userOID, err := primitive.ObjectIDFromHex(userID); err == nil {
-			query["userId"] = userOID
+			query["user_id"] = userOID
 		} else {
-			query["userId"] = userID
+			query["user_id"] = userID
 		}
 	}
 
@@ -330,7 +349,7 @@ func (os *OrderService) UpdateOrderStatus(orderID, newStatus, userID string) (*m
 
 	if userID != "" {
 		if userOID, err := primitive.ObjectIDFromHex(userID); err == nil {
-			query["userId"] = userOID
+			query["user_id"] = userOID
 		}
 	}
 
@@ -634,7 +653,7 @@ func (os *OrderService) restoreOrderStock(orderItems []models.OrderItem) error {
 	return nil
 }
 
-// generateOrderNumber tạo order number
+// generateOrderNumber тạо order number
 func (os *OrderService) generateOrderNumber() string {
 	date := time.Now()
 	year := date.Year()
@@ -643,4 +662,50 @@ func (os *OrderService) generateOrderNumber() string {
 	sequence := date.Unix() % 10000 // Use unix timestamp for uniqueness
 
 	return fmt.Sprintf("GP%d%02d%02d%04d", year, month, day, sequence)
+}
+
+// GetOrderByNumber lấy đơn hàng theo order number
+func (os *OrderService) GetOrderByNumber(orderNumber string) (*models.Order, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db := config.GetDB()
+	collection := db.Collection("orders")
+
+	query := bson.M{"order_number": orderNumber}
+
+	var order models.Order
+	err := collection.FindOne(ctx, query).Decode(&order)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, errors.New("đơn hàng không tồn tại")
+		}
+		return nil, errors.New("lỗi khi tìm đơn hàng")
+	}
+
+	return &order, nil
+}
+
+// GetOrdersByEmail lấy đơn hàng theo email
+func (os *OrderService) GetOrdersByEmail(email string) ([]models.Order, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db := config.GetDB()
+	collection := db.Collection("orders")
+
+	query := bson.M{"shipping_address.email": email}
+
+	cursor, err := collection.Find(ctx, query)
+	if err != nil {
+		return nil, errors.New("lỗi khi tìm đơn hàng theo email")
+	}
+	defer cursor.Close(ctx)
+
+	var orders []models.Order
+	if err = cursor.All(ctx, &orders); err != nil {
+		return nil, errors.New("lỗi khi decode đơn hàng")
+	}
+
+	return orders, nil
 }
