@@ -307,7 +307,12 @@ func (pc *ProductController) GetFeaturedProducts(c *gin.Context) {
 
 // GetRelatedProducts lấy sản phẩm liên quan
 func (pc *ProductController) GetRelatedProducts(c *gin.Context) {
-	slug := c.Param("slug")
+	// Try to get slug first, then id (for backward compatibility)
+	identifier := c.Param("slug")
+	if identifier == "" {
+		identifier = c.Param("id")
+	}
+
 	limitStr := c.DefaultQuery("limit", "4")
 
 	limit, err := strconv.Atoi(limitStr)
@@ -316,7 +321,7 @@ func (pc *ProductController) GetRelatedProducts(c *gin.Context) {
 	}
 
 	// Call service method
-	products, category, err := pc.productService.GetRelatedProducts(slug, limit)
+	products, category, err := pc.productService.GetRelatedProducts(identifier, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,

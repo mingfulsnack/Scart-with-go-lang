@@ -23,15 +23,21 @@ function ProductDetail() {
   const loadProduct = async () => {
     try {
       setLoading(true)
+      console.log('Loading product with slug:', slug)
       const response = await productAPI.getProduct(slug)
+      console.log('Product API response:', response.data)
       
       if (response.data.success) {
+        console.log('Product data received:', response.data.data)
         setProduct(response.data.data)
         // Load recommended products after getting product data
         loadRecommendedProducts(slug)
+      } else {
+        console.error('Product API returned success: false')
       }
     } catch (error) {
       console.error('Error loading product:', error)
+      console.error('Error details:', error.response?.data)
     } finally {
       setLoading(false)
     }
@@ -60,13 +66,22 @@ function ProductDetail() {
   const loadRecommendedProducts = async (productSlug) => {
     try {
       setRecommendedLoading(true)
+      console.log('Loading recommended products for slug:', productSlug)
       const response = await productAPI.getRecommendedProducts(productSlug, { limit: 4 })
+      console.log('Recommended products API response:', response.data)
       
       if (response.data.success) {
+        console.log('Recommended products data:', response.data.data)
         setRecommendedProducts(response.data.data)
+        console.log('Recommended products state updated')
+      } else {
+        console.error('Recommended products API returned success: false')
+        setRecommendedProducts([])
       }
     } catch (error) {
       console.error('Error loading recommended products:', error)
+      console.error('Error details:', error.response?.data)
+      setRecommendedProducts([])
     } finally {
       setRecommendedLoading(false)
     }
@@ -126,7 +141,7 @@ function ProductDetail() {
               <li><Link to="/">Home</Link></li>
               <li><Link to="/product">Shop</Link></li>
               {product.category && (
-                <li><Link to={`/category/${product.category}`}>{categories.find(cat => cat.id === product.category)?.name || product.category}</Link></li>
+                <li><Link to={`/category/${product.category.id || product.category}`}>{product.category.name || product.category}</Link></li>
               )}
               <li className="active">{product.name}</li>
             </ul>
@@ -214,8 +229,8 @@ function ProductDetail() {
                 {product.category && (
                   <div className="mb-3">
                     Category: 
-                    <Link to={`/category/${product.category}`} className="ms-2 text-decoration-none">
-                      {categories.find(cat => cat.id === product.category)?.name || product.category}
+                    <Link to={`/category/${product.category.id || product.category}`} className="ms-2 text-decoration-none">
+                      {product.category.name || product.category}
                     </Link>
                   </div>
                 )}
@@ -318,7 +333,7 @@ function ProductDetail() {
       </section>
 
       {/* Recommended Products */}
-      {recommendedProducts.length > 0 && (
+      {recommendedProducts && recommendedProducts.length > 0 && (
         <section className="section section-sm section-last bg-default">
           <div className="container">
             <h4 className="font-weight-sbold mb-4">Recommended Products</h4>
@@ -328,64 +343,75 @@ function ProductDetail() {
               </div>
             ) : (
               <div className="row row-lg row-30 row-lg-50 justify-content-center">
-                {recommendedProducts.map((recommendedProduct) => (
-                  <div key={recommendedProduct._id} className="col-sm-6 col-md-4 col-lg-3 mb-4">
-                    <article className="product">
-                      <div className="product-body">
-                        <div className="product-figure">
-                          <Link to={`/product/${recommendedProduct.slug}`}>
-                            <img 
-                              src={recommendedProduct.image} 
-                              alt={recommendedProduct.name}
-                              className="img-fluid"
-                            />
-                          </Link>
-                        </div>
-                        <h5 className="product-title">
-                          <Link to={`/product/${recommendedProduct.slug}`}>
-                            {recommendedProduct.name}
-                          </Link>
-                        </h5>
-                        
-                        <button 
-                          onClick={() => handleRecommendedAddToCart(recommendedProduct.id, 'cart')}
-                          className="btn btn-secondary btn-sm add-to-cart-list w-100 mb-2"
-                          disabled={cartLoading}
-                        >
-                          <i className="fa fa-cart-plus"></i> Add to cart
-                        </button>
-                        
-                        <div className="product-price-wrap">
-                          <div className="product-price">{formatPrice(recommendedProduct.price)}</div>
-                        </div>
-                      </div>
-                      
-                      <div className="product-button-wrap">
-                        <div className="product-button">
+                {recommendedProducts.map((recommendedProduct) => {
+                  // Add safety checks for each product
+                  if (!recommendedProduct || !recommendedProduct._id) {
+                    console.error('Invalid recommended product:', recommendedProduct)
+                    return null
+                  }
+                  
+                  return (
+                    <div key={recommendedProduct._id} className="col-sm-6 col-md-4 col-lg-3 mb-4">
+                      <article className="product">
+                        <div className="product-body">
+                          <div className="product-figure">
+                            <Link to={`/product/${encodeURIComponent(recommendedProduct.slug || recommendedProduct.id)}`}>
+                              <img 
+                                src={recommendedProduct.image || '/placeholder.jpg'} 
+                                alt={recommendedProduct.name || 'Product'}
+                                className="img-fluid"
+                                onError={(e) => {
+                                  e.target.src = '/placeholder.jpg'
+                                }}
+                              />
+                            </Link>
+                          </div>
+                          <h5 className="product-title">
+                            <Link to={`/product/${encodeURIComponent(recommendedProduct.slug || recommendedProduct.id)}`}>
+                              {recommendedProduct.name || 'Unnamed Product'}
+                            </Link>
+                          </h5>
+                          
                           <button 
-                            className="btn btn-outline-danger btn-sm w-100"
-                            onClick={() => handleRecommendedAddToCart(recommendedProduct.id, 'wishlist')}
+                            onClick={() => handleRecommendedAddToCart(recommendedProduct.id, 'cart')}
+                            className="btn btn-secondary btn-sm add-to-cart-list w-100 mb-2"
                             disabled={cartLoading}
-                            title="Add to Wishlist"
                           >
-                            <i className="fas fa-heart"></i>
+                            <i className="fa fa-cart-plus"></i> Add to cart
                           </button>
+                          
+                          <div className="product-price-wrap">
+                            <div className="product-price">{formatPrice(recommendedProduct.price || 0)}</div>
+                          </div>
                         </div>
                         
-                        <div className="product-button">
-                          <button 
-                            className="btn btn-outline-info btn-sm w-100"
-                            onClick={() => handleRecommendedAddToCart(recommendedProduct.id, 'compare')}
-                            disabled={cartLoading}
-                            title="Add to Compare"
-                          >
-                            <i className="fa fa-exchange"></i>
-                          </button>
+                        <div className="product-button-wrap">
+                          <div className="product-button">
+                            <button 
+                              className="btn btn-outline-danger btn-sm w-100"
+                              onClick={() => handleRecommendedAddToCart(recommendedProduct.id, 'wishlist')}
+                              disabled={cartLoading}
+                              title="Add to Wishlist"
+                            >
+                              <i className="fas fa-heart"></i>
+                            </button>
+                          </div>
+                          
+                          <div className="product-button">
+                            <button 
+                              className="btn btn-outline-info btn-sm w-100"
+                              onClick={() => handleRecommendedAddToCart(recommendedProduct.id, 'compare')}
+                              disabled={cartLoading}
+                              title="Add to Compare"
+                            >
+                              <i className="fa fa-exchange"></i>
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    </article>
-                  </div>
-                ))}
+                      </article>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

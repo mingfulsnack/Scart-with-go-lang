@@ -498,7 +498,7 @@ func (ps *ProductService) GetFeaturedProducts(limit int) ([]models.Product, erro
 }
 
 // GetRelatedProducts retrieves products related to a given product (by category)
-func (ps *ProductService) GetRelatedProducts(slug string, limit int) ([]models.Product, string, error) {
+func (ps *ProductService) GetRelatedProducts(identifier string, limit int) ([]models.Product, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -509,9 +509,23 @@ func (ps *ProductService) GetRelatedProducts(slug string, limit int) ([]models.P
 		limit = 4
 	}
 
-	// First, get the current product
+	// First, get the current product - try by slug first, then by ID, then by ObjectID
 	var currentProduct models.Product
-	err := collection.FindOne(ctx, bson.M{"slug": slug}).Decode(&currentProduct)
+	var err error
+
+	// Try to find by slug first
+	err = collection.FindOne(ctx, bson.M{"slug": identifier}).Decode(&currentProduct)
+	if err != nil {
+		// If not found by slug, try by ProductID
+		err = collection.FindOne(ctx, bson.M{"id": identifier}).Decode(&currentProduct)
+		if err != nil {
+			// If not found by ProductID, try by ObjectID
+			if objectID, parseErr := primitive.ObjectIDFromHex(identifier); parseErr == nil {
+				err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&currentProduct)
+			}
+		}
+	}
+
 	if err != nil {
 		return nil, "", fmt.Errorf("product not found: %v", err)
 	}
@@ -522,12 +536,20 @@ func (ps *ProductService) GetRelatedProducts(slug string, limit int) ([]models.P
 		// Get products from same category, excluding current product
 		filter = bson.M{
 			"category": currentProduct.Category,
-			"slug":     bson.M{"$ne": slug},
+			"$and": []bson.M{
+				{"slug": bson.M{"$ne": currentProduct.Slug}},
+				{"id": bson.M{"$ne": currentProduct.ProductID}},
+				{"_id": bson.M{"$ne": currentProduct.ID}},
+			},
 		}
 	} else {
 		// Fallback: get random products excluding current product
 		filter = bson.M{
-			"slug": bson.M{"$ne": slug},
+			"$and": []bson.M{
+				{"slug": bson.M{"$ne": currentProduct.Slug}},
+				{"id": bson.M{"$ne": currentProduct.ProductID}},
+				{"_id": bson.M{"$ne": currentProduct.ID}},
+			},
 		}
 	}
 

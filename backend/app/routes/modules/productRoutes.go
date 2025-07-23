@@ -16,10 +16,8 @@ func SetupProductRoutes(rg *gin.RouterGroup) {
 		products.GET("", productController.GetProducts)
 		products.GET("/search", productController.SearchProducts)
 		products.GET("/category/:category", productController.GetProductsByCategory)
-		products.GET("/:id", productController.GetProductByID)
-		products.GET("/slug/:slug", productController.GetProductBySlug)
-		products.GET("/featured", productController.GetFeaturedProducts)
-		products.GET("/related/:slug", productController.GetRelatedProducts)
+		products.GET("/:slug/recommended", productController.GetRelatedProducts)
+		products.GET("/:slug", productController.GetProductBySlug)
 
 		// Protected routes (Admin only)
 		protected := products.Group("")

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import ProductCard from '../components/ProductCard'
-import api from '../services/api'
+import { productAPI } from '../services/api'
 
 function Home() {
   const [products, setProducts] = useState([])
@@ -14,18 +14,21 @@ function Home() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const [productsResponse, bannersResponse] = await Promise.all([
-        api.get('/products'),
-        api.get('/banners')
-      ])
-
+      
+      // Load products using the proper API method
+      const productsResponse = await productAPI.getProducts()
+      console.log('Products API response:', productsResponse.data)
+      
       if (productsResponse.data.success) {
         setProducts(productsResponse.data.data)
       }
 
-      if (bannersResponse.data.success) {
-        setBanners(bannersResponse.data.data)
-      }
+      // Note: banners API might not exist, so we'll skip it for now
+      // const bannersResponse = await api.get('/banners')
+      // if (bannersResponse.data.success) {
+      //   setBanners(bannersResponse.data.data)
+      // }
+      
     } catch (error) {
       console.error('Error loading data:', error)
     } finally {

@@ -18,7 +18,7 @@ function ProductCard({ product }) {
       <article className="product">
         <div className="product-body">
           <div className="product-figure">
-            <Link to={`/product/${product.slug}`}>
+            <Link to={`/product/${encodeURIComponent(product.slug)}`}>
               <img 
                 src={product.image} 
                 alt={product.name}
@@ -28,7 +28,7 @@ function ProductCard({ product }) {
           </div>
           
           <h5 className="product-title">
-            <Link to={`/product/${product.slug}`}>
+            <Link to={`/product/${encodeURIComponent(product.slug)}`}>
               {product.name}
             </Link>
           </h5>
