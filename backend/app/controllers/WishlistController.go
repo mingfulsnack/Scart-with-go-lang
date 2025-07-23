@@ -169,11 +169,12 @@ func (wc *WishlistController) AddToWishlist(c *gin.Context) {
 
 // RemoveFromWishlist xóa sản phẩm khỏi wishlist
 func (wc *WishlistController) RemoveFromWishlist(c *gin.Context) {
-	var req RemoveFromWishlistRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	// Get productId from URL parameter
+	productId := c.Param("productId")
+	if productId == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "Dữ liệu không hợp lệ: " + err.Error(),
+			"message": "Product ID is required",
 		})
 		return
 	}
@@ -205,7 +206,7 @@ func (wc *WishlistController) RemoveFromWishlist(c *gin.Context) {
 		return
 	}
 
-	result, err := wishlistService.RemoveProductFromWishlist(userID.(string), req.ProductID)
+	result, err := wishlistService.RemoveProductFromWishlist(userID.(string), productId)
 	if err != nil {
 		// Handle specific error types
 		if err.Error() == "wishlist không tồn tại" ||

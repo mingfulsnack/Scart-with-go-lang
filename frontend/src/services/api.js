@@ -109,8 +109,8 @@ export const orderAPI = {
 export const adminAPI = {
   // Dashboard
   getStats: () => api.get('/admin/stats'),
-  getRecentOrders: (limit = 10) => api.get(`/admin/recent-orders?limit=${limit}`),
-  getRecentUsers: (limit = 10) => api.get(`/admin/recent-users?limit=${limit}`),
+  getRecentOrders: (limit = 10) => api.get(`/admin/orders/recent?limit=${limit}`),
+  getRecentUsers: (limit = 10) => api.get(`/admin/users?limit=${limit}`), // Use users endpoint with limit
   
   // Product Management
   getProducts: (params = {}) => {
@@ -170,8 +170,8 @@ export const adminAPI = {
 export const cartAPI = {
   getCart: () => api.get("/cart"),
   addToCart: (data) => api.post("/cart/add", data), // Changed to accept object directly
-  updateCartItem: (data) => api.put("/cart/update", data), // Changed to accept object directly
-  removeFromCart: (productId) => api.delete("/cart/remove", { data: { product_id: productId } }),
+  updateCartItem: (productId, data) => api.put(`/cart/update/${productId}`, data), // productId in URL path
+  removeFromCart: (productId) => api.delete(`/cart/remove/${productId}`), // productId in URL path
   clearCart: () => api.delete("/cart/clear"),
 };
 
@@ -179,7 +179,7 @@ export const cartAPI = {
 export const wishlistAPI = {
   getWishlist: () => api.get("/wishlist"),
   addToWishlist: (data) => api.post("/wishlist/add", data), // Changed to accept object directly
-  removeFromWishlist: (productId) => api.delete("/wishlist/remove", { data: { product_id: productId } }),
+  removeFromWishlist: (productId) => api.delete(`/wishlist/remove/${productId}`), // productId in URL path
   clearWishlist: () => api.delete("/wishlist/clear"),
 };
 
@@ -187,7 +187,7 @@ export const wishlistAPI = {
 export const compareAPI = {
   getCompare: () => api.get("/compare"),
   addToCompare: (data) => api.post("/compare/add", data), // Changed to accept object directly
-  removeFromCompare: (productId) => api.delete("/compare/remove", { data: { product_id: productId } }),
+  removeFromCompare: (productId) => api.delete(`/compare/remove/${productId}`), // productId in URL path
   clearCompare: () => api.delete("/compare/clear"),
 };
 

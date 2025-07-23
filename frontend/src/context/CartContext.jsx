@@ -288,8 +288,7 @@ export function CartProvider({ children }) {
     try {
       dispatch({ type: 'SET_LOADING', payload: true })
       
-      const response = await cartAPI.updateCartItem({
-        product_id: productId,
+      const response = await cartAPI.updateCartItem(productId, {
         quantity: parseInt(quantity)
       })
 

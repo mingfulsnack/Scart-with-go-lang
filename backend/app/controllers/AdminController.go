@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -146,6 +147,9 @@ func (ac *AdminController) GetDashboardStats(c *gin.Context) {
 		"success": true,
 		"data":    stats,
 	})
+
+	// Debug log
+	fmt.Printf("DEBUG: Dashboard stats returned: %+v\n", stats)
 }
 
 // GetAllUsers lấy danh sách tất cả users (Admin only)
@@ -317,4 +321,57 @@ func (ac *AdminController) GetRecentOrders(c *gin.Context) {
 		"success": true,
 		"data":    orders,
 	})
+}
+
+// Admin Product Management
+func (ac *AdminController) GetAllProducts(c *gin.Context) {
+	productController := NewProductController()
+	productController.GetProducts(c)
+}
+
+func (ac *AdminController) CreateProduct(c *gin.Context) {
+	productController := NewProductController()
+	productController.CreateProduct(c)
+}
+
+func (ac *AdminController) UpdateProduct(c *gin.Context) {
+	productController := NewProductController()
+	productController.UpdateProduct(c)
+}
+
+func (ac *AdminController) DeleteProduct(c *gin.Context) {
+	productController := NewProductController()
+	productController.DeleteProduct(c)
+}
+
+// Admin Category Management
+func (ac *AdminController) GetAllCategories(c *gin.Context) {
+	categoryController := &CategoryController{}
+	categoryController.GetAllCategories(c)
+}
+
+func (ac *AdminController) CreateCategory(c *gin.Context) {
+	categoryController := &CategoryController{}
+	categoryController.CreateCategory(c)
+}
+
+func (ac *AdminController) UpdateCategory(c *gin.Context) {
+	categoryController := &CategoryController{}
+	categoryController.UpdateCategory(c)
+}
+
+func (ac *AdminController) DeleteCategory(c *gin.Context) {
+	categoryController := &CategoryController{}
+	categoryController.DeleteCategory(c)
+}
+
+// Admin Order Management
+func (ac *AdminController) GetAllOrders(c *gin.Context) {
+	orderController := &OrderController{}
+	orderController.GetAllOrders(c)
+}
+
+func (ac *AdminController) UpdateOrderStatus(c *gin.Context) {
+	orderController := &OrderController{}
+	orderController.UpdateOrderStatus(c)
 }

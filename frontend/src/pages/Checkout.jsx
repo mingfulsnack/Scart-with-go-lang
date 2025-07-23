@@ -16,7 +16,8 @@ function Checkout() {
     country: 'VN',
     address1: '',
     address2: '',
-    comment: ''
+    comment: '',
+    paymentMethod: 'COD' // Add payment method field with valid default
   })
 
   const handleInputChange = (e) => {
@@ -40,8 +41,8 @@ function Checkout() {
     e.preventDefault()
     
     // Validation
-    if (!formData.firstName || !formData.lastName || !formData.email || !formData.phone || !formData.address1) {
-      alert('Please fill in all required fields')
+    if (!formData.firstName || !formData.lastName || !formData.email || !formData.phone || !formData.address1 || !formData.paymentMethod) {
+      alert('Please fill in all required fields including payment method')
       return
     }
 
@@ -53,10 +54,19 @@ function Checkout() {
     try {
       setIsSubmitting(true)
       
+      // Create full address string
+      const fullAddress = formData.address2 
+        ? `${formData.address1}, ${formData.address2}` 
+        : formData.address1
+      
       const orderData = {
-        items: cart,
-        customer: formData,
-        total: calculateTotal()
+        shipping_address: fullAddress,
+        phone: formData.phone,
+        customer_phone: formData.phone,
+        customer_name: `${formData.firstName} ${formData.lastName}`,
+        customer_email: formData.email,
+        payment_method: formData.paymentMethod,
+        notes: formData.comment || ""
       }
       
       console.log('Creating order with data:', orderData)
@@ -243,6 +253,23 @@ function Checkout() {
                       value={formData.address2}
                       onChange={handleInputChange}
                     />
+                  </div>
+
+                  <div className="mb-3">
+                    <label className="form-label">Payment Method</label>
+                    <select 
+                      className="form-control" 
+                      name="paymentMethod"
+                      value={formData.paymentMethod}
+                      onChange={handleInputChange}
+                      required
+                    >
+                      <option value="">Select Payment Method</option>
+                      <option value="COD">Cash on Delivery (COD)</option>
+                      <option value="cash_on_delivery">Cash on Delivery</option>
+                      <option value="bank_transfer">Bank Transfer</option>
+                      <option value="credit_card">Credit Card</option>
+                    </select>
                   </div>
 
                   <div className="mb-3">

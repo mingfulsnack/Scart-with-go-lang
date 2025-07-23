@@ -157,11 +157,12 @@ func (cc *CompareController) AddToCompare(c *gin.Context) {
 
 // RemoveFromCompare xóa sản phẩm khỏi danh sách so sánh
 func (cc *CompareController) RemoveFromCompare(c *gin.Context) {
-	var req RemoveFromCompareRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	// Get productId from URL parameter
+	productId := c.Param("productId")
+	if productId == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "Dữ liệu không hợp lệ: " + err.Error(),
+			"message": "Product ID is required",
 		})
 		return
 	}
@@ -193,7 +194,7 @@ func (cc *CompareController) RemoveFromCompare(c *gin.Context) {
 		return
 	}
 
-	compare, err := compareService.RemoveProductFromCompare(userID.(string), req.ProductID)
+	compare, err := compareService.RemoveProductFromCompare(userID.(string), productId)
 	if err != nil {
 		// Handle specific error types
 		if err.Error() == "compare không tồn tại" ||
