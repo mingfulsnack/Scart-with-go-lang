@@ -10,11 +10,19 @@ import (
 	"github.com/mingfulsnack/app/config"
 	"github.com/mingfulsnack/app/models"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type AdminController struct{}
+type AdminController struct {
+	userService *UserService
+}
+
+// NewAdminController creates a new admin controller instance
+func NewAdminController() *AdminController {
+	return &AdminController{
+		userService: NewUserService(),
+	}
+}
 
 // DashboardStats struct for admin dashboard statistics
 type DashboardStats struct {
@@ -142,13 +150,11 @@ func (ac *AdminController) GetDashboardStats(c *gin.Context) {
 
 // GetAllUsers lấy danh sách tất cả users (Admin only)
 func (ac *AdminController) GetAllUsers(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// Parse query parameters
 	pageStr := c.DefaultQuery("page", "1")
 	limitStr := c.DefaultQuery("limit", "10")
 	search := c.Query("search")
+	role := c.Query("role")
 
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 1 {
@@ -160,71 +166,26 @@ func (ac *AdminController) GetAllUsers(c *gin.Context) {
 		limit = 10
 	}
 
-	db := config.GetDB()
-	collection := db.Collection("Users")
-
-	// Build filter
-	filter := bson.M{}
-	if search != "" {
-		filter["$or"] = []bson.M{
-			{"name": bson.M{"$regex": search, "$options": "i"}},
-			{"email": bson.M{"$regex": search, "$options": "i"}},
-		}
+	// Build filters
+	filters := UserFilters{
+		Role:   role,
+		Search: search,
 	}
 
-	// Build sort options
-	sortOptions := options.Find()
-	sortOptions.SetSort(bson.D{{Key: "createdAt", Value: -1}})
-
-	// Apply pagination
-	skip := (page - 1) * limit
-	sortOptions.SetSkip(int64(skip)).SetLimit(int64(limit))
-
-	cursor, err := collection.Find(ctx, filter, sortOptions)
+	// Call service method
+	result, err := ac.userService.GetAllUsers(page, limit, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
-			"message": "Lỗi khi lấy danh sách users",
+			"message": "Lỗi khi lấy danh sách users: " + err.Error(),
 		})
 		return
 	}
-	defer cursor.Close(ctx)
-
-	var users []models.User
-	if err = cursor.All(ctx, &users); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Lỗi khi decode users",
-		})
-		return
-	}
-
-	// Hide password field
-	for i := range users {
-		users[i].Password = ""
-	}
-
-	// Count total
-	total, err := collection.CountDocuments(ctx, filter)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Lỗi khi đếm users",
-		})
-		return
-	}
-
-	totalPages := (int(total) + limit - 1) / limit
 
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data":    users,
-		"pagination": gin.H{
-			"current_page":   page,
-			"total_pages":    totalPages,
-			"total_items":    total,
-			"items_per_page": limit,
-		},
+		"success":    true,
+		"data":       result.Users,
+		"pagination": result.Pagination,
 	})
 }
 
@@ -233,7 +194,9 @@ func (ac *AdminController) UpdateUserStatus(c *gin.Context) {
 	id := c.Param("id")
 
 	var updateData struct {
-		IsActive bool `json:"isActive"`
+		IsActive bool   `json:"isActive"`
+		Role     string `json:"role"`
+		Status   string `json:"status"`
 	}
 
 	if err := c.ShouldBindJSON(&updateData); err != nil {
@@ -244,43 +207,34 @@ func (ac *AdminController) UpdateUserStatus(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Get current user role for authorization
+	currentUserRole, _ := c.Get("userRole")
+	currentUserID, _ := c.Get("userID")
 
-	db := config.GetDB()
-	collection := db.Collection("Users")
+	// Build update data
+	updateFields := bson.M{}
+	if updateData.Role != "" {
+		updateFields["role"] = updateData.Role
+	}
+	if updateData.Status != "" {
+		updateFields["status"] = updateData.Status
+	}
 
-	var filter bson.M
-	if objectID, parseErr := primitive.ObjectIDFromHex(id); parseErr == nil {
-		filter = bson.M{"_id": objectID}
-	} else {
+	// Convert isActive to status for backward compatibility
+	if updateData.Status == "" {
+		if updateData.IsActive {
+			updateFields["status"] = "active"
+		} else {
+			updateFields["status"] = "inactive"
+		}
+	}
+
+	// Call service method
+	_, err := ac.userService.UpdateUser(id, updateFields, currentUserID.(string), currentUserRole.(string))
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "User ID không hợp lệ",
-		})
-		return
-	}
-
-	update := bson.M{
-		"$set": bson.M{
-			"isActive":  updateData.IsActive,
-			"updatedAt": time.Now(),
-		},
-	}
-
-	result, err := collection.UpdateOne(ctx, filter, update)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Lỗi khi cập nhật user",
-		})
-		return
-	}
-
-	if result.MatchedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"message": "Không tìm thấy user",
+			"message": err.Error(),
 		})
 		return
 	}
@@ -295,37 +249,23 @@ func (ac *AdminController) UpdateUserStatus(c *gin.Context) {
 func (ac *AdminController) DeleteUser(c *gin.Context) {
 	id := c.Param("id")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Get current user role for authorization
+	currentUserRole, _ := c.Get("userRole")
 
-	db := config.GetDB()
-	collection := db.Collection("Users")
-
-	var filter bson.M
-	if objectID, parseErr := primitive.ObjectIDFromHex(id); parseErr == nil {
-		filter = bson.M{"_id": objectID}
-	} else {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "User ID không hợp lệ",
-		})
-		return
-	}
-
-	result, err := collection.DeleteOne(ctx, filter)
+	// Call service method
+	err := ac.userService.DeleteUser(id, currentUserRole.(string))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Lỗi khi xóa user",
-		})
-		return
-	}
-
-	if result.DeletedCount == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"success": false,
-			"message": "Không tìm thấy user",
-		})
+		if err.Error() == "user does not exist" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "Không tìm thấy user",
+			})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+		}
 		return
 	}
 

@@ -8,7 +8,7 @@ import (
 
 // SetupProductRoutes thiết lập routes cho products
 func SetupProductRoutes(rg *gin.RouterGroup) {
-	productController := &controllers.ProductController{}
+	productController := controllers.NewProductController()
 
 	products := rg.Group("/products")
 	{
@@ -18,6 +18,8 @@ func SetupProductRoutes(rg *gin.RouterGroup) {
 		products.GET("/category/:category", productController.GetProductsByCategory)
 		products.GET("/:id", productController.GetProductByID)
 		products.GET("/slug/:slug", productController.GetProductBySlug)
+		products.GET("/featured", productController.GetFeaturedProducts)
+		products.GET("/related/:slug", productController.GetRelatedProducts)
 
 		// Protected routes (Admin only)
 		protected := products.Group("")

@@ -1,23 +1,23 @@
 package controllers
 
 import (
-	"context"
-	"log"
 	"net/http"
-	"os"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/mingfulsnack/app/config"
 	"github.com/mingfulsnack/app/models"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"golang.org/x/crypto/bcrypt"
 )
 
-type AuthController struct{}
+type AuthController struct {
+	userService *UserService
+}
+
+// NewAuthController creates a new auth controller instance
+func NewAuthController() *AuthController {
+	return &AuthController{
+		userService: NewUserService(),
+	}
+}
 
 // RegisterRequest struct for registration data
 type RegisterRequest struct {
@@ -64,93 +64,50 @@ func (ac *AuthController) Register(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Create user data
+	userData := models.User{
+		Username: req.Username,
+		Email:    req.Email,
+		Password: req.Password,
+		FullName: req.FullName,
+		Phone:    req.Phone,
+	}
 
-	db := config.GetDB()
-	collection := db.Collection("Users")
-
-	// Kiểm tra username đã tồn tại
-	var existingUser models.User
-	err := collection.FindOne(ctx, bson.M{"username": req.Username}).Decode(&existingUser)
-	if err == nil {
+	// Call service method
+	createdUser, err := ac.userService.RegisterUser(userData)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, AuthResponse{
 			Success: false,
-			Message: "Username đã được sử dụng",
+			Message: err.Error(),
 		})
 		return
 	}
 
-	// Kiểm tra email đã tồn tại
-	err = collection.FindOne(ctx, bson.M{"email": req.Email}).Decode(&existingUser)
-	if err == nil {
-		c.JSON(http.StatusBadRequest, AuthResponse{
-			Success: false,
-			Message: "Email đã được sử dụng",
-		})
-		return
-	}
-
-	// Hash password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	// Generate JWT token
+	loginResult, err := ac.userService.LoginUser(req.Username, req.Password)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, AuthResponse{
 			Success: false,
-			Message: "Lỗi mã hóa mật khẩu",
+			Message: "Lỗi tạo token: " + err.Error(),
 		})
 		return
 	}
 
-	// Tạo user mới
-	user := models.User{
-		Username:      req.Username,
-		Email:         req.Email,
-		Password:      string(hashedPassword),
-		FullName:      req.FullName,
-		Phone:         req.Phone,
-		Role:          "user",
-		Status:        "active",
-		EmailVerified: false,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-	}
-
-	result, err := collection.InsertOne(ctx, user)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, AuthResponse{
-			Success: false,
-			Message: "Lỗi server trong quá trình đăng ký",
-		})
-		return
-	}
-
-	user.ID = result.InsertedID.(primitive.ObjectID)
-
-	// Tạo JWT token
-	token, err := ac.generateToken(user)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, AuthResponse{
-			Success: false,
-			Message: "Lỗi tạo token",
-		})
-		return
-	}
-
-	// Chuẩn bị response
+	// Prepare response
 	userResponse := UserResponse{
-		ID:       user.ID.Hex(),
-		Username: user.Username,
-		Email:    user.Email,
-		FullName: user.FullName,
-		Phone:    user.Phone,
-		Role:     user.Role,
-		Status:   user.Status,
+		ID:       createdUser.ID.Hex(),
+		Username: createdUser.Username,
+		Email:    createdUser.Email,
+		FullName: createdUser.FullName,
+		Phone:    createdUser.Phone,
+		Role:     createdUser.Role,
+		Status:   createdUser.Status,
 	}
 
 	c.JSON(http.StatusCreated, AuthResponse{
 		Success: true,
 		Message: "Đăng ký thành công",
-		Token:   token,
+		Token:   loginResult.Token,
 		User:    userResponse,
 	})
 }
@@ -159,7 +116,6 @@ func (ac *AuthController) Register(c *gin.Context) {
 func (ac *AuthController) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("Login binding error: %v", err)
 		c.JSON(http.StatusBadRequest, AuthResponse{
 			Success: false,
 			Message: "Username và password là bắt buộc",
@@ -167,132 +123,45 @@ func (ac *AuthController) Login(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Login attempt - Username: '%s', Password length: %d", req.Username, len(req.Password))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db := config.GetDB()
-	collection := db.Collection("Users")
-
-	// Tìm user
-	var user models.User
-	err := collection.FindOne(ctx, bson.M{"username": req.Username}).Decode(&user)
+	// Call service method
+	loginResult, err := ac.userService.LoginUser(req.Username, req.Password)
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			log.Printf("User not found: %s", req.Username)
+		if err.Error() == "username or password is incorrect" {
 			c.JSON(http.StatusUnauthorized, AuthResponse{
 				Success: false,
 				Message: "Tên đăng nhập hoặc mật khẩu không đúng",
 			})
-			return
-		}
-		log.Printf("Database error finding user: %v", err)
-		c.JSON(http.StatusInternalServerError, AuthResponse{
-			Success: false,
-			Message: "Lỗi server",
-		})
-		return
-	}
-
-	log.Printf("User found: %s, Role: %s, Status: %s", user.Username, user.Role, user.Status)
-	log.Printf("Stored password hash: %s", user.Password)
-	log.Printf("Input password: %s", req.Password)
-
-	// Kiểm tra password - hỗ trợ cả plain text và bcrypt hash
-	var passwordValid bool
-
-	// Kiểm tra xem password có được hash bằng bcrypt chưa
-	if len(user.Password) >= 50 && user.Password[0] == '$' {
-		// Password đã được hash bằng bcrypt
-		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password))
-		passwordValid = (err == nil)
-		if err != nil {
-			log.Printf("Bcrypt password comparison failed: %v", err)
+		} else if err.Error() == "account is disabled" {
+			c.JSON(http.StatusUnauthorized, AuthResponse{
+				Success: false,
+				Message: "Tài khoản đã bị khóa",
+			})
 		} else {
-			log.Printf("Bcrypt password comparison successful")
+			c.JSON(http.StatusInternalServerError, AuthResponse{
+				Success: false,
+				Message: "Lỗi server: " + err.Error(),
+			})
 		}
-	} else {
-		// Password chưa được hash - so sánh trực tiếp (tạm thời)
-		passwordValid = (user.Password == req.Password)
-		if passwordValid {
-			log.Printf("Plain text password comparison successful")
-		} else {
-			log.Printf("Plain text password comparison failed")
-		}
-	}
-
-	if !passwordValid {
-		c.JSON(http.StatusUnauthorized, AuthResponse{
-			Success: false,
-			Message: "Tên đăng nhập hoặc mật khẩu không đúng",
-		})
 		return
 	}
 
-	// Kiểm tra trạng thái user
-	if user.Status != "active" {
-		c.JSON(http.StatusUnauthorized, AuthResponse{
-			Success: false,
-			Message: "Tài khoản đã bị khóa",
-		})
-		return
-	}
-
-	// Cập nhật last login
-	now := time.Now()
-	user.LastLogin = &now
-	collection.UpdateOne(ctx, bson.M{"_id": user.ID}, bson.M{
-		"$set": bson.M{"last_login": now},
-	})
-
-	// Tạo JWT token
-	token, err := ac.generateToken(user)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, AuthResponse{
-			Success: false,
-			Message: "Lỗi tạo token",
-		})
-		return
-	}
-
-	// Chuẩn bị response
+	// Prepare response
 	userResponse := UserResponse{
-		ID:       user.ID.Hex(),
-		Username: user.Username,
-		Email:    user.Email,
-		FullName: user.FullName,
-		Phone:    user.Phone,
-		Role:     user.Role,
-		Status:   user.Status,
+		ID:       loginResult.User.ID.Hex(),
+		Username: loginResult.User.Username,
+		Email:    loginResult.User.Email,
+		FullName: loginResult.User.FullName,
+		Phone:    loginResult.User.Phone,
+		Role:     loginResult.User.Role,
+		Status:   loginResult.User.Status,
 	}
 
 	c.JSON(http.StatusOK, AuthResponse{
 		Success: true,
 		Message: "Đăng nhập thành công",
-		Token:   token,
+		Token:   loginResult.Token,
 		User:    userResponse,
 	})
-}
-
-// generateToken tạo JWT token
-func (ac *AuthController) generateToken(user models.User) (string, error) {
-	claims := jwt.MapClaims{
-		"userID":   user.ID.Hex(),
-		"username": user.Username,
-		"email":    user.Email,
-		"role":     user.Role,
-		"exp":      time.Now().Add(24 * time.Hour).Unix(),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "fallback_jwt_secret_g47_project_2024"
-	}
-
-	return token.SignedString([]byte(secret))
 }
 
 // GetProfile lấy thông tin profile
@@ -306,28 +175,20 @@ func (ac *AuthController) GetProfile(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	objectID, err := primitive.ObjectIDFromHex(userID.(string))
+	// Call service method
+	user, err := ac.userService.GetUserByID(userID.(string))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, AuthResponse{
-			Success: false,
-			Message: "Invalid user ID",
-		})
-		return
-	}
-
-	db := config.GetDB()
-	collection := db.Collection("Users")
-
-	var user models.User
-	err = collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user)
-	if err != nil {
-		c.JSON(http.StatusNotFound, AuthResponse{
-			Success: false,
-			Message: "User not found",
-		})
+		if err.Error() == "user does not exist" {
+			c.JSON(http.StatusNotFound, AuthResponse{
+				Success: false,
+				Message: "User not found",
+			})
+		} else {
+			c.JSON(http.StatusInternalServerError, AuthResponse{
+				Success: false,
+				Message: "Lỗi server: " + err.Error(),
+			})
+		}
 		return
 	}
 
@@ -344,5 +205,84 @@ func (ac *AuthController) GetProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"user":    userResponse,
+	})
+}
+
+// UpdateProfile cập nhật thông tin profile
+func (ac *AuthController) UpdateProfile(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "Unauthorized",
+		})
+		return
+	}
+
+	var updateData bson.M
+	if err := c.ShouldBindJSON(&updateData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Dữ liệu không hợp lệ: " + err.Error(),
+		})
+		return
+	}
+
+	userRole, _ := c.Get("userRole")
+
+	// Call service method
+	updatedUser, err := ac.userService.UpdateUser(userID.(string), updateData, userID.(string), userRole.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Cập nhật thông tin thành công",
+		"user":    updatedUser,
+	})
+}
+
+// ChangePassword đổi mật khẩu
+func (ac *AuthController) ChangePassword(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "Unauthorized",
+		})
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password" binding:"required"`
+		NewPassword     string `json:"new_password" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Vui lòng nhập đầy đủ mật khẩu cũ và mới",
+		})
+		return
+	}
+
+	// Call service method
+	err := ac.userService.ChangePassword(userID.(string), req.CurrentPassword, req.NewPassword)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Đổi mật khẩu thành công",
 	})
 }

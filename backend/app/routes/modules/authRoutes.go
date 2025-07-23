@@ -8,7 +8,7 @@ import (
 
 // SetupAuthRoutes thiết lập routes cho authentication
 func SetupAuthRoutes(rg *gin.RouterGroup) {
-	authController := &controllers.AuthController{}
+	authController := controllers.NewAuthController()
 
 	auth := rg.Group("/auth")
 	{
@@ -17,6 +17,12 @@ func SetupAuthRoutes(rg *gin.RouterGroup) {
 		auth.POST("/login", authController.Login)
 
 		// Protected routes
-		auth.GET("/profile", middleware.AuthMiddleware(), authController.GetProfile)
+		protected := auth.Group("")
+		protected.Use(middleware.AuthMiddleware())
+		{
+			protected.GET("/profile", authController.GetProfile)
+			protected.PUT("/profile", authController.UpdateProfile)
+			protected.POST("/change-password", authController.ChangePassword)
+		}
 	}
 }

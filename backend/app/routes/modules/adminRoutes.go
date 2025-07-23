@@ -8,7 +8,7 @@ import (
 
 // SetupAdminRoutes thiết lập routes cho admin
 func SetupAdminRoutes(rg *gin.RouterGroup) {
-	adminController := &controllers.AdminController{}
+	adminController := controllers.NewAdminController()
 
 	admin := rg.Group("/admin")
 	admin.Use(middleware.AuthMiddleware()) // Tất cả admin routes đều cần auth
